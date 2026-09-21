@@ -13,7 +13,7 @@ def init_db():
                  (id INTEGER PRIMARY KEY, event_id INTEGER, name TEXT, email TEXT, ticket_id TEXT)''')
     conn.commit()
     conn.close()
-
+init_db()
 @app.route('/')
 def home():
     conn = sqlite3.connect('events.db')

@@ -25,7 +25,18 @@ class Registration(db.Model):
     email = db.Column(db.String(100))
 
 with app.app_context():
-    db.create_all()
+    try:
+        db.create_all()
+        from sqlalchemy import inspect
+        inspector = inspect(db.engine)
+        if 'event' in inspector.get_table_names():
+            cols = [c['name'] for c in inspector.get_columns('event')]
+            if 'image' not in cols:
+                db.drop_all()
+                db.create_all()
+    except:
+        db.drop_all()
+        db.create_all()
 
 @app.route('/')
 def home():
@@ -41,14 +52,14 @@ def admin_login():
             session['admin'] = True
             return redirect('/')
         else:
-            return "<h3>Galat Password! admin / admin123 likho <a href='/admin-login'>Wapas</a></h3>"
+            return "Wrong password! admin / admin123 <a href='/admin-login'>Try again</a>"
     return '''
     <div style="max-width:400px;margin:80px auto;font-family:sans-serif;text-align:center;border:1px solid #ddd;padding:30px;border-radius:10px">
     <h2>Admin Login</h2>
     <form method="POST">
     <input name="username" value="admin" style="width:100%;padding:10px;margin:10px 0"><br>
     <input name="password" type="password" placeholder="admin123" style="width:100%;padding:10px;margin:10px 0"><br>
-    <button style="width:100%;padding:12px;background:#6a11cb;color:white;border:none;border-radius:5px;font-size:16px">Login</button>
+    <button style="width:100%;padding:12px;background:#6a11cb;color:white;border:none;border-radius:5px">Login</button>
     </form></div>
     '''
 
@@ -68,7 +79,6 @@ def create_event():
             nums = re.findall(r'\d+', price_text)
             if nums:
                 price = int(nums[0])
-
         new_event = Event(
             name=request.form.get('name'),
             date=request.form.get('date'),

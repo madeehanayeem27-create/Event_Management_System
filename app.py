@@ -1,117 +1,103 @@
-from flask import Flask, render_template, request, redirect, session
-from flask_sqlalchemy import SQLAlchemy
-import re
+from flask import Flask, render_template, request, redirect, session, url_for
+import sqlite3, os, uuid, qrcode
 
 app = Flask(__name__)
-app.secret_key = "eventmanager-pro-2026"
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///events.db'
-db = SQLAlchemy(app)
+app.secret_key = 'final_year_major_project'
 
-class Event(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100))
-    date = db.Column(db.String(50))
-    location = db.Column(db.String(100))
-    capacity = db.Column(db.Integer)
-    price = db.Column(db.Integer)
-    category = db.Column(db.String(50))
-    description = db.Column(db.Text)
-    image = db.Column(db.String(500))
-
-class Registration(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    event_id = db.Column(db.Integer)
-    name = db.Column(db.String(100))
-    email = db.Column(db.String(100))
-
-with app.app_context():
-    try:
-        db.create_all()
-        from sqlalchemy import inspect
-        inspector = inspect(db.engine)
-        if 'event' in inspector.get_table_names():
-            cols = [c['name'] for c in inspector.get_columns('event')]
-            if 'image' not in cols:
-                db.drop_all()
-                db.create_all()
-    except:
-        db.drop_all()
-        db.create_all()
+def init_db():
+    conn = sqlite3.connect('events.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS events
+                 (id INTEGER PRIMARY KEY, name TEXT, date TEXT, location TEXT, capacity TEXT, price TEXT, category TEXT, description TEXT, image TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS regs
+                 (id INTEGER PRIMARY KEY, event_id INTEGER, name TEXT, email TEXT, ticket_id TEXT)''')
+    conn.commit()
+    conn.close()
 
 @app.route('/')
 def home():
-    events = Event.query.all()
-    total_reg = Registration.query.count()
-    is_admin = 'admin' in session
-    return render_template('index.html', events=events, total_reg=total_reg, is_admin=is_admin)
+    conn = sqlite3.connect('events.db')
+    c = conn.cursor()
+    c.execute('SELECT * FROM events ORDER BY id DESC')
+    events = c.fetchall()
+    c.execute('SELECT COUNT(*) FROM regs')
+    total = c.fetchone()[0]
+    conn.close()
+    return render_template('index.html', events=events, count=total)
 
+@app.route('/register', methods=['POST'])
+def register():
+    event_id = request.form['event_id']
+    name = request.form['name']
+    email = request.form['email']
+    ticket_id = str(uuid.uuid4())[:8].upper()
+
+    # QR Code Generate
+    if not os.path.exists('static/qr'): os.makedirs('static/qr')
+    qr_data = f"TicketID:{ticket_id} | Event:{event_id} | User:{email}"
+    img = qrcode.make(qr_data)
+    img.save(f'static/qr/{ticket_id}.png')
+
+    conn = sqlite3.connect('events.db')
+    c = conn.cursor()
+    c.execute('INSERT INTO regs (event_id, name, email, ticket_id) VALUES (?,?,?,?)', (event_id, name, email, ticket_id))
+    conn.commit()
+    conn.close()
+    return render_template('ticket.html', ticket_id=ticket_id, name=name, email=email)
+
+@app.route('/ticket/<ticket_id>')
+def ticket(ticket_id):
+    return render_template('ticket.html', ticket_id=ticket_id)
+
+# ADMIN
 @app.route('/admin-login', methods=['GET', 'POST'])
 def admin_login():
     if request.method == 'POST':
-        if request.form.get('username') == 'admin' and request.form.get('password') == 'admin123':
+        if request.form['username'] == 'admin' and request.form['password'] == 'admin123':
             session['admin'] = True
-            return redirect('/')
-        else:
-            return "Wrong password! admin / admin123 <a href='/admin-login'>Try again</a>"
-    return '''
-    <div style="max-width:400px;margin:80px auto;font-family:sans-serif;text-align:center;border:1px solid #ddd;padding:30px;border-radius:10px">
-    <h2>Admin Login</h2>
-    <form method="POST">
-    <input name="username" value="admin" style="width:100%;padding:10px;margin:10px 0"><br>
-    <input name="password" type="password" placeholder="admin123" style="width:100%;padding:10px;margin:10px 0"><br>
-    <button style="width:100%;padding:12px;background:#6a11cb;color:white;border:none;border-radius:5px">Login</button>
-    </form></div>
-    '''
+            return redirect('/admin')
+    return render_template('admin_login.html')
+
+@app.route('/admin')
+def admin():
+    if 'admin' not in session: return redirect('/admin-login')
+    conn = sqlite3.connect('events.db')
+    c = conn.cursor()
+    c.execute('SELECT * FROM events ORDER BY id DESC')
+    events = c.fetchall()
+    c.execute('SELECT regs.*, events.name as ename FROM regs LEFT JOIN events ON regs.event_id = events.id ORDER BY regs.id DESC')
+    regs = c.fetchall()
+    c.execute('SELECT COUNT(*) FROM regs')
+    total = c.fetchone()[0]
+    conn.close()
+    return render_template('admin.html', events=events, regs=regs, total=total)
+
+@app.route('/add-event', methods=['POST'])
+def add_event():
+    if 'admin' not in session: return redirect('/admin-login')
+    data = (request.form['name'], request.form['date'], request.form['location'], request.form['capacity'], request.form['price'], request.form['category'], request.form['description'], request.form['image'])
+    conn = sqlite3.connect('events.db')
+    c = conn.cursor()
+    c.execute('INSERT INTO events (name, date, location, capacity, price, category, description, image) VALUES (?,?,?,?,?,?,?,?)', data)
+    conn.commit()
+    conn.close()
+    return redirect('/admin')
+
+@app.route('/delete/<int:id>')
+def delete(id):
+    if 'admin' not in session: return redirect('/admin-login')
+    conn = sqlite3.connect('events.db')
+    c = conn.cursor()
+    c.execute('DELETE FROM events WHERE id=?', (id,))
+    conn.commit()
+    conn.close()
+    return redirect('/admin')
 
 @app.route('/logout')
 def logout():
     session.pop('admin', None)
     return redirect('/')
 
-@app.route('/create', methods=['POST'])
-def create_event():
-    if 'admin' not in session:
-        return redirect('/admin-login')
-    try:
-        price_text = request.form.get('price') or '0'
-        price = 0
-        if 'free' not in price_text.lower():
-            nums = re.findall(r'\d+', price_text)
-            if nums:
-                price = int(nums[0])
-        new_event = Event(
-            name=request.form.get('name'),
-            date=request.form.get('date'),
-            location=request.form.get('location'),
-            capacity=int(request.form.get('capacity') or 100),
-            price=price,
-            category=request.form.get('category') or 'Tech',
-            description=request.form.get('description') or '',
-            image=request.form.get('image') or 'https://images.unsplash.com/photo-1501281668745-f7f57925c3b4'
-        )
-        db.session.add(new_event)
-        db.session.commit()
-        return redirect('/')
-    except Exception as e:
-        return f"Error: {e}"
-
-@app.route('/register/<int:event_id>', methods=['POST'])
-def register(event_id):
-    name = request.form.get('name')
-    email = request.form.get('email')
-    if name and email:
-        reg = Registration(event_id=event_id, name=name, email=email)
-        db.session.add(reg)
-        db.session.commit()
-    return redirect('/')
-
-@app.route('/delete/<int:event_id>')
-def delete(event_id):
-    if 'admin' not in session:
-        return redirect('/admin-login')
-    Event.query.filter_by(id=event_id).delete()
-    db.session.commit()
-    return redirect('/')
-
 if __name__ == '__main__':
+    init_db()
     app.run(debug=True)
